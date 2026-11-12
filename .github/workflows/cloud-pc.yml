@@ -1,64 +1,41 @@
 name: cloud-pc
-
-# 免费云电脑（GitHub Actions）
-# 触发：Actions -> cloud-pc -> Run workflow
-# 结果回传：执行完把输出 POST 到 ntfy 频道，手机侧直接取
-# 无 token、无服务器、每月 2000 分钟免费（私有库）/ 不限（公开库）
-
 on:
   workflow_dispatch:
     inputs:
       cmd:
-        description: "要执行的命令"
-        required: false
-        default: "uname -a; nproc; free -h; df -h /"
+        description: 命令
+        default: uname -a; nproc; free -h
       topic:
-        description: "回传频道名"
-        required: false
-        default: "dsh-cloud-pc-e79b8f38"
+        description: 频道
+        default: dsh-cloud-pc-e79b8f38
       secs:
-        description: "跑完保持在线秒数（0=立刻结束）"
-        required: false
+        description: 保持秒
         default: "0"
-
 permissions:
   contents: read
-
 jobs:
   pc:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      CMD: ${{ inputs.cmd }}
+      TOPIC: ${{ inputs.topic }}
+      SECS: ${{ inputs.secs }}
     steps:
       - uses: actions/checkout@v4
-
       - name: 开机
         run: |
-          echo "### 云电脑已开机"
-          uname -a
-          nproc
-          free -h
-          df -h /
+          uname -a; nproc; free -h; df -h /
           sudo apt-get update -qq
-          sudo apt-get install -y -qq curl wget git jq unzip zip ripgrep tmux htop tree python3-pip sqlite3 ffmpeg >/dev/null 2>&1 || true
-
+          sudo apt-get install -y -qq curl wget git jq unzip zip ripgrep tmux htop tree python3-pip python3-venv sqlite3 ffmpeg >/dev/null 2>&1 || true
       - name: 执行并回传
         run: |
           set +e
-          T="${{ inputs.topic }}"
           OUT=/tmp/out.txt
-          bash -lc "${{ inputs.cmd }}" >"$OUT" 2>&1
+          bash -lc "$CMD" >"$OUT" 2>&1
           RC=$?
-          {
-            echo "EXIT=$RC"
-            echo "-----"
-            head -c 3000 "$OUT"
-          } > /tmp/msg.txt
-          curl -s --max-time 20 -X POST "https://ntfy.sh/$T" \
-            -H "Title: cloud-pc done" -H "Tags: white_check_mark" \
-            --data-binary @/tmp/msg.txt >/dev/null || true
-          echo "已回传到 ntfy 频道 $T"
-          echo "退出码 $RC"
-          tail -50 "$OUT"
-          # 可选保持在线，便于连续调试
-          S="${{ inputs.secs }}"
-          if [ "$S" != "0" ]; then sleep "$S"; fi
+          { echo "EXIT=$RC"; echo "-----"; head -c 3500 "$OUT"; } > /tmp/m.txt
+          curl -s --max-time 25 -X POST "https://ntfy.sh/$TOPIC" -H "Title: cloud-pc done" --data-binary @/tmp/m.txt >/dev/null || echo 回传失败
+          echo "已回传 $TOPIC 退出码 $RC"
+          tail -60 "$OUT"
+          if [ "$SECS" != "0" ]; then sleep "$SECS"; fi
