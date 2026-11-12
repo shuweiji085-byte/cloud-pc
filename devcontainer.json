@@ -1,0 +1,16 @@
+{
+  "name": "cloud-pc",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" }
+  },
+  "postCreateCommand": "bash bootstrap.sh",
+  "remoteEnv": { "USE_CN_MIRROR": "yes" },
+  "hostRequirements": { "cpus": 2 },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "esbenp.prettier-vscode", "timonwong.shellcheck"]
+    }
+  }
+}
