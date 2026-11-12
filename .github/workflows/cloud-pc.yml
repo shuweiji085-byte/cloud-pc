@@ -1,102 +1,64 @@
 name: cloud-pc
 
-# 免费云电脑：把 GitHub Actions 当一台按需开机、用完即毁的 Linux 机器。
-# 用法：Actions 页 -> cloud-pc -> Run workflow，填 command，跑完看 Summary / artifact。
-# 也支持开一个临时 SSH 会话（tmate），在手机终端里直接登进去敲命令。
+# 免费云电脑（GitHub Actions）
+# 触发：Actions -> cloud-pc -> Run workflow
+# 结果回传：执行完把输出 POST 到 ntfy 频道，手机侧直接取
+# 无 token、无服务器、每月 2000 分钟免费（私有库）/ 不限（公开库）
 
 on:
   workflow_dispatch:
     inputs:
-      command:
+      cmd:
         description: "要执行的命令"
         required: false
-        default: "uname -a && nproc && free -h && df -h /"
-      mode:
-        description: "run=跑命令后退出；ssh=开 tmate SSH 会话等你连"
-        required: true
-        default: "run"
-        type: choice
-        options: [run, ssh]
-      timeout_minutes:
-        description: "最长运行分钟数（ssh 模式建议 30 以内）"
-        required: true
-        default: "20"
-      setup:
-        description: "开机前是否装常用工具"
-        required: true
-        default: "yes"
-        type: choice
-        options: [yes, no]
+        default: "uname -a; nproc; free -h; df -h /"
+      topic:
+        description: "回传频道名"
+        required: false
+        default: "dsh-cloud-pc-e79b8f38"
+      secs:
+        description: "跑完保持在线秒数（0=立刻结束）"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
 
 jobs:
-  cloud-pc:
+  pc:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: 开机信息
+      - name: 开机
         run: |
-          echo "### 云电脑已开机" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          uname -a >> $GITHUB_STEP_SUMMARY
-          lscpu | head -20 >> $GITHUB_STEP_SUMMARY
-          free -h >> $GITHUB_STEP_SUMMARY
-          df -h / >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: 装常用工具（可选）
-        if: inputs.setup == 'yes'
-        run: |
+          echo "### 云电脑已开机"
+          uname -a
+          nproc
+          free -h
+          df -h /
           sudo apt-get update -qq
-          sudo apt-get install -y -qq curl wget git jq unzip zip ripgrep tmux htop tree \
-            python3-pip python3-venv build-essential sqlite3 ffmpeg >/dev/null
-          bash bootstrap.sh || true
+          sudo apt-get install -y -qq curl wget git jq unzip zip ripgrep tmux htop tree python3-pip sqlite3 ffmpeg >/dev/null 2>&1 || true
 
-      - name: 执行命令
-        if: inputs.mode == 'run'
+      - name: 执行并回传
         run: |
           set +e
-          echo "### 命令输出" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          bash -lc "${{ inputs.command }}" 2>&1 | tee /tmp/out.txt | tail -400 >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "EXIT=${PIPESTATUS[0]}" >> $GITHUB_STEP_SUMMARY
-          mkdir -p artifacts
-          cp /tmp/out.txt artifacts/command-output.txt
-          # 工作目录里新产生的文件一并带走
-          git status --porcelain | awk '{print $2}' | while read -r f; do
-            [ -f "$f" ] && cp --parents "$f" artifacts/ 2>/dev/null
-          done
-          exit 0
-
-      - name: 上传产物
-        if: always() && inputs.mode == 'run'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cloud-pc-output
-          path: artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: 开 SSH 会话（tmate）
-        if: inputs.mode == 'ssh'
-        timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
-        run: |
-          sudo apt-get install -y -qq tmate >/dev/null 2>&1 || true
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          WEB=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
-          echo "### SSH 连进来" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$SSH" >> $GITHUB_STEP_SUMMARY
-          echo "$WEB" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "SSH: $SSH"
-          echo "WEB: $WEB"
-          # 保持在线直到超时
-          while true; do sleep 30; done
+          T="${{ inputs.topic }}"
+          OUT=/tmp/out.txt
+          bash -lc "${{ inputs.cmd }}" >"$OUT" 2>&1
+          RC=$?
+          {
+            echo "EXIT=$RC"
+            echo "-----"
+            head -c 3000 "$OUT"
+          } > /tmp/msg.txt
+          curl -s --max-time 20 -X POST "https://ntfy.sh/$T" \
+            -H "Title: cloud-pc done" -H "Tags: white_check_mark" \
+            --data-binary @/tmp/msg.txt >/dev/null || true
+          echo "已回传到 ntfy 频道 $T"
+          echo "退出码 $RC"
+          tail -50 "$OUT"
+          # 可选保持在线，便于连续调试
+          S="${{ inputs.secs }}"
+          if [ "$S" != "0" ]; then sleep "$S"; fi
